@@ -1,52 +1,122 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
-import { Chess, type Square } from "chess.js";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+} from "react";
+import { Chess, DEFAULT_POSITION, type Square } from "chess.js";
 import type { PieceDropHandlerArgs } from "react-chessboard";
 import { Icon, KnightMark } from "@/components/ui/icon";
+import type { ImportedGame } from "@/lib/chess/import-game";
 import { ImportPanel } from "@/components/analysis/import-panel";
 import { evaloPieces } from "@/components/chess/pieces";
 import { BoardArrows, type BoardArrow } from "@/components/chess/board-arrows";
+import { useEngine } from "@/components/chess/use-engine";
+import { EngineControls } from "@/components/chess/engine-controls";
+import { EvaluationBar } from "@/components/chess/evaluation-bar";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 const Chessboard = dynamic(
   () => import("react-chessboard").then((module) => module.Chessboard),
-  { ssr: false, loading: () => <div className="board-loading">Loading your board…</div> },
+  {
+    ssr: false,
+    loading: () => <div className="board-loading">Loading your board…</div>,
+  },
 );
 
 type Mode = "home" | "import" | "puzzle";
-type Promotion = "q" | "r" | "b" | "n";
-const pieceNames: Record<string, string> = { P: "pawn", R: "rook", N: "knight", B: "bishop", Q: "queen", K: "king" };
+const pieceNames: Record<string, string> = {
+  P: "pawn",
+  R: "rook",
+  N: "knight",
+  B: "bishop",
+  Q: "queen",
+  K: "king",
+};
 
 export default function Home() {
   const [mode, setMode] = useState<Mode>("home");
+  const [imported, setImported] = useState<ImportedGame | null>(null);
+  const [initialFen, setInitialFen] = useState(DEFAULT_POSITION);
   const [moves, setMoves] = useState<string[]>([]);
   const [ply, setPly] = useState(0);
   const [orientation, setOrientation] = useState<"white" | "black">("white");
-  const [promotion, setPromotion] = useState<Promotion>("q");
   const [selected, setSelected] = useState<Square | null>(null);
   const [focusedSquare, setFocusedSquare] = useState("e2");
   const [arrows, setArrows] = useState<BoardArrow[]>([]);
+  const [markedSquares, setMarkedSquares] = useState<string[]>([]);
   const [drawingArrow, setDrawingArrow] = useState<BoardArrow | null>(null);
   const arrowGesture = useRef<BoardArrow | null>(null);
   const arrowPointerId = useRef<number | null>(null);
   const game = useMemo(() => {
-    const chess = new Chess();
+    const chess = new Chess(initialFen);
     moves.slice(0, ply).forEach((move) => chess.move(move));
     return chess;
-  }, [moves, ply]);
+  }, [moves, ply, initialFen]);
+  const engine = useEngine(game);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      )
+        return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+        )
+      )
+        return;
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        return;
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      setPly((current) =>
+        Math.max(
+          0,
+          Math.min(
+            moves.length,
+            current + (event.key === "ArrowRight" ? 1 : -1),
+          ),
+        ),
+      );
+      setSelected(null);
+      setArrows([]);
+      setMarkedSquares([]);
+      arrowGesture.current = null;
+      arrowPointerId.current = null;
+      setDrawingArrow(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [moves.length]);
 
   const turn = game.turn() === "w" ? "White" : "Black";
   const status = game.isCheckmate()
     ? `Checkmate · ${turn === "White" ? "Black" : "White"} wins`
-    : game.isStalemate() ? "Draw by stalemate"
-      : game.isDraw() ? "Game drawn" : `${turn} to move${game.isCheck() ? " · Check" : ""}`;
+    : game.isStalemate()
+      ? "Draw by stalemate"
+      : game.isDraw()
+        ? "Game drawn"
+        : `${turn} to move${game.isCheck() ? " · Check" : ""}`;
   const lastMove = game.history({ verbose: true }).at(-1);
   const squareStyles: Record<string, CSSProperties> = {};
   const legalTargets = new Set<string>();
   if (lastMove) {
-    for (const square of [lastMove.from, lastMove.to]) squareStyles[square] = { backgroundColor: "#c5d67a" };
+    for (const square of [lastMove.from, lastMove.to])
+      squareStyles[square] = { backgroundColor: "#c5d67a" };
   }
   if (selected) {
     squareStyles[selected] = { backgroundColor: "#d5dc80" };
@@ -61,6 +131,13 @@ export default function Home() {
     }
   }
 
+  for (const square of markedSquares) {
+    squareStyles[square] = {
+      ...squareStyles[square],
+      backgroundColor: "#e66b64",
+    };
+  }
+
   function navigate(nextPly: number) {
     setPly(nextPly);
     setSelected(null);
@@ -69,6 +146,7 @@ export default function Home() {
 
   function clearArrows() {
     setArrows([]);
+    setMarkedSquares([]);
     cancelArrow();
   }
 
@@ -80,11 +158,27 @@ export default function Home() {
 
   function finishArrow(endSquare: string | null) {
     const gesture = arrowGesture.current;
-    if (gesture && endSquare && gesture.startSquare !== endSquare) {
+    if (gesture && endSquare === gesture.startSquare) {
+      setMarkedSquares((current) =>
+        current.includes(endSquare)
+          ? current.filter((square) => square !== endSquare)
+          : [...current, endSquare],
+      );
+    } else if (gesture && endSquare) {
       const arrow = { startSquare: gesture.startSquare, endSquare };
-      setArrows((current) => current.some((item) => item.startSquare === arrow.startSquare && item.endSquare === arrow.endSquare)
-        ? current.filter((item) => item.startSquare !== arrow.startSquare || item.endSquare !== arrow.endSquare)
-        : [...current, arrow]);
+      setArrows((current) =>
+        current.some(
+          (item) =>
+            item.startSquare === arrow.startSquare &&
+            item.endSquare === arrow.endSquare,
+        )
+          ? current.filter(
+              (item) =>
+                item.startSquare !== arrow.startSquare ||
+                item.endSquare !== arrow.endSquare,
+            )
+          : [...current, arrow],
+      );
     }
     cancelArrow();
   }
@@ -94,9 +188,10 @@ export default function Home() {
     const bounds = frame.getBoundingClientRect();
     const x = event.clientX - bounds.left - frame.clientLeft;
     const y = event.clientY - bounds.top - frame.clientTop;
-    if (x < 0 || y < 0 || x >= frame.clientWidth || y >= frame.clientHeight) return null;
-    const column = Math.floor(x / frame.clientWidth * 8);
-    const row = Math.floor(y / frame.clientHeight * 8);
+    if (x < 0 || y < 0 || x >= frame.clientWidth || y >= frame.clientHeight)
+      return null;
+    const column = Math.floor((x / frame.clientWidth) * 8);
+    const row = Math.floor((y / frame.clientHeight) * 8);
     const file = orientation === "white" ? column : 7 - column;
     const rank = orientation === "white" ? 8 - row : row + 1;
     return `${String.fromCharCode(97 + file)}${rank}` as Square;
@@ -125,7 +220,8 @@ export default function Home() {
   }
 
   function moveBoardPointer(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerId !== arrowPointerId.current || !arrowGesture.current) return;
+    if (event.pointerId !== arrowPointerId.current || !arrowGesture.current)
+      return;
     event.preventDefault();
     event.stopPropagation();
     if (!(event.buttons & 2)) {
@@ -140,7 +236,8 @@ export default function Home() {
   }
 
   function endBoardPointer(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerId !== arrowPointerId.current || event.button !== 2) return;
+    if (event.pointerId !== arrowPointerId.current || event.button !== 2)
+      return;
     event.preventDefault();
     event.stopPropagation();
     finishArrow(squareAtPointer(event));
@@ -149,11 +246,34 @@ export default function Home() {
     }
   }
 
+  function importGame(next: ImportedGame) {
+    setImported(next);
+    setInitialFen(next.initialFen);
+    setMoves(next.moves);
+    setPly(0);
+    setSelected(null);
+    clearArrows();
+    setOrientation("white");
+    setMode("home");
+  }
+
+  const moveOffset = (Number(initialFen.split(" ")[5]) - 1) * 2 + (initialFen.split(" ")[1] === "b" ? 1 : 0);
+  const moveRows: { number: number; entries: { san: string; ply: number; black: boolean }[] }[] = [];
+  moves.forEach((san, index) => {
+    const number = Math.floor((moveOffset + index) / 2) + 1;
+    if (moveRows.at(-1)?.number !== number) moveRows.push({ number, entries: [] });
+    moveRows.at(-1)!.entries.push({ san, ply: index + 1, black: (moveOffset + index) % 2 === 1 });
+  });
+
+  function player(color: "white" | "black") {
+    return imported ? `${imported[color]}${imported[`${color}Elo`] ? ` (${imported[`${color}Elo`]})` : ""}` : `${color === "white" ? "White" : "Black"} pieces`;
+  }
+
   function makeMove(from: string, to: string) {
     if (game.isGameOver()) return false;
     const nextGame = new Chess(game.fen());
     try {
-      const move = nextGame.move({ from, to, promotion });
+      const move = nextGame.move({ from, to, promotion: "q" });
       setMoves([...moves.slice(0, ply), move.san]);
       setPly(ply + 1);
       setSelected(null);
@@ -176,25 +296,49 @@ export default function Home() {
     }
     if (selected && makeMove(selected, square)) return;
     const piece = game.get(square as Square);
-    setSelected(piece?.color === game.turn() ? square as Square : null);
+    setSelected(piece?.color === game.turn() ? (square as Square) : null);
   }
 
   return (
     <>
-      <a className="skip-link" href="#workspace">Skip to workspace</a>
+      <a className="skip-link" href="#workspace">
+        Skip to workspace
+      </a>
       <header className="site-header">
         <div className="header-inner">
-          <div className="brand"><KnightMark /><span>Evalo<span className="brand-dot">.</span></span><span className="brand-caption">A clearer game.</span></div>
-          <span className="profile-icon" role="img" aria-label="Profile, account features not yet available" title="Profile · coming later"><Icon name="user" /></span>
+          <div className="brand">
+            <KnightMark />
+            <span>
+              Evalo<span className="brand-dot">.</span>
+            </span>
+          </div>
+          <ThemeToggle />
         </div>
       </header>
 
       <main id="workspace" className="workspace" tabIndex={-1}>
-        <div className="workspace-heading"><div><p className="eyebrow">YOUR CHESS WORKSPACE</p><h1>Make sense of every move.</h1></div><ThemeToggle /></div>
+        <h1 className="sr-only">Chess board</h1>
         <div className="workspace-grid">
           <section className="board-card" aria-label="Interactive chessboard">
-            <div className="player-row"><span className={`player-avatar ${orientation === "white" ? "player-black" : "player-white"}`}><Icon name="user" /></span><div><strong>{orientation === "white" ? "Black" : "White"} pieces</strong><span>Local board</span></div><span className="player-color-label">{orientation === "white" ? "BLACK" : "WHITE"}</span></div>
-            <div className="board-frame"
+            <div className="player-row">
+              <span
+                className={`player-avatar ${orientation === "white" ? "player-black" : "player-white"}`}
+              >
+                <Icon name="user" />
+              </span>
+              <div>
+                <strong>
+                  {player(orientation === "white" ? "black" : "white")}
+                </strong>
+              </div>
+              <span className="player-color-label">
+                {orientation === "white" ? "BLACK" : "WHITE"}
+              </span>
+            </div>
+            <div className="board-with-eval">
+              <EvaluationBar evaluation={engine.evaluation} orientation={orientation} enabled={engine.enabled} />
+            <div
+              className="board-frame"
               onContextMenu={(event) => event.preventDefault()}
               onDragStartCapture={(event) => event.preventDefault()}
               onPointerDownCapture={startBoardPointer}
@@ -203,94 +347,274 @@ export default function Home() {
               onPointerCancel={cancelArrow}
               onLostPointerCapture={(event) => {
                 if (event.pointerId === arrowPointerId.current) cancelArrow();
-              }}>
-              <Chessboard options={{
-                id: "evalo-chessboard",
-                position: game.fen(),
-                pieces: evaloPieces,
-                boardOrientation: orientation,
-                onPieceDrop,
-                onSquareClick: ({ square }) => selectSquare(square),
-                onPieceDrag: ({ square }) => {
-                  if (square && game.get(square as Square)?.color === game.turn()) setSelected(square as Square);
-                },
-                allowDragging: !game.isGameOver(),
-                canDragPiece: ({ piece }) => piece.pieceType[0] === game.turn(),
-                allowDrawingArrows: false,
-                darkSquareStyle: { backgroundColor: "var(--board-dark, #769656)" },
-                lightSquareStyle: { backgroundColor: "var(--board-light, #eeeed2)" },
-                darkSquareNotationStyle: { color: "#f8faee", fontSize: "12px", fontWeight: 600 },
-                lightSquareNotationStyle: { color: "#42642c", fontSize: "12px", fontWeight: 600 },
-                squareStyles,
-                squareRenderer: ({ square, piece, children }) => (
-                  <div className="keyboard-square" style={squareStyles[square]} data-board-square={square} data-legal-target={legalTargets.has(square) || undefined} role="button" tabIndex={focusedSquare === square ? 0 : -1}
-                    aria-label={`${square}${piece ? `, ${piece.pieceType[0] === "w" ? "white" : "black"} ${pieceNames[piece.pieceType[1]]}` : ", empty"}`}
-                    aria-pressed={selected === square}
-                    onFocus={() => setFocusedSquare(square)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
+              }}
+            >
+              <Chessboard
+                options={{
+                  id: "evalo-chessboard",
+                  position: game.fen(),
+                  pieces: evaloPieces,
+                  boardOrientation: orientation,
+                  onPieceDrop,
+                  onSquareClick: ({ square }) => selectSquare(square),
+                  onPieceDrag: ({ square }) => {
+                    if (
+                      square &&
+                      game.get(square as Square)?.color === game.turn()
+                    )
+                      setSelected(square as Square);
+                  },
+                  allowDragging: !game.isGameOver(),
+                  canDragPiece: ({ piece }) =>
+                    piece.pieceType[0] === game.turn(),
+                  allowDrawingArrows: false,
+                  darkSquareStyle: {
+                    backgroundColor: "var(--board-dark, #769656)",
+                  },
+                  lightSquareStyle: {
+                    backgroundColor: "var(--board-light, #eeeed2)",
+                  },
+                  darkSquareNotationStyle: {
+                    color: "#f8faee",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                  },
+                  lightSquareNotationStyle: {
+                    color: "#42642c",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                  },
+                  squareStyles,
+                  squareRenderer: ({ square, piece, children }) => (
+                    <div
+                      className="keyboard-square"
+                      style={squareStyles[square]}
+                      data-board-square={square}
+                      data-legal-target={legalTargets.has(square) || undefined}
+                      role="button"
+                      tabIndex={focusedSquare === square ? 0 : -1}
+                      aria-label={`${square}${piece ? `, ${piece.pieceType[0] === "w" ? "white" : "black"} ${pieceNames[piece.pieceType[1]]}` : ", empty"}`}
+                      aria-pressed={selected === square}
+                      onFocus={() => setFocusedSquare(square)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          selectSquare(square);
+                          return;
+                        }
+                        if (!event.shiftKey) return;
+                        const offsets: Record<string, [number, number]> = {
+                          ArrowUp: [0, 1],
+                          ArrowDown: [0, -1],
+                          ArrowLeft: [-1, 0],
+                          ArrowRight: [1, 0],
+                        };
+                        const offset = offsets[event.key];
+                        if (!offset) return;
                         event.preventDefault();
-                        selectSquare(square);
-                        return;
-                      }
-                      const offsets: Record<string, [number, number]> = { ArrowUp: [0, 1], ArrowDown: [0, -1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
-                      const offset = offsets[event.key];
-                      if (!offset) return;
-                      event.preventDefault();
-                      const direction = orientation === "white" ? 1 : -1;
-                      const file = square.charCodeAt(0) + offset[0] * direction;
-                      const rank = Number(square[1]) + offset[1] * direction;
-                      if (file < 97 || file > 104 || rank < 1 || rank > 8) return;
-                      const target = `${String.fromCharCode(file)}${rank}`;
-                      event.currentTarget.closest(".board-frame")?.querySelector<HTMLElement>(`[data-board-square="${target}"]`)?.focus();
-                    }}>{children}</div>
-                ),
-              }} />
-              <BoardArrows arrows={arrows} preview={drawingArrow} orientation={orientation} />
+                        const direction = orientation === "white" ? 1 : -1;
+                        const file =
+                          square.charCodeAt(0) + offset[0] * direction;
+                        const rank = Number(square[1]) + offset[1] * direction;
+                        if (file < 97 || file > 104 || rank < 1 || rank > 8)
+                          return;
+                        const target = `${String.fromCharCode(file)}${rank}`;
+                        event.currentTarget
+                          .closest(".board-frame")
+                          ?.querySelector<HTMLElement>(
+                            `[data-board-square="${target}"]`,
+                          )
+                          ?.focus();
+                      }}
+                    >
+                      {children}
+                    </div>
+                  ),
+                }}
+              />
+              {engine.arrow && <BoardArrows arrows={[engine.arrow]} preview={null} orientation={orientation} color="#318ce7" engine />}
+              <BoardArrows
+                arrows={arrows}
+                preview={drawingArrow}
+                orientation={orientation}
+              />
             </div>
-            <div className="player-row bottom-player"><span className={`player-avatar ${orientation === "white" ? "player-white" : "player-black"}`}><Icon name="user" /></span><div><strong>{orientation === "white" ? "White" : "Black"} pieces</strong><span>Local board</span></div><span className="turn-indicator" role="status"><span className="status-dot" />{status}</span></div>
-            <div className="board-toolbar">
-              <button className="icon-button" aria-label="Flip board" title="Flip board" onClick={() => setOrientation(orientation === "white" ? "black" : "white")}><Icon name="flip" /></button>
-              <div className="move-navigation" aria-label="Move navigation">
-                <button className="icon-button" aria-label="First move" title="First move" disabled={ply === 0} onClick={() => navigate(0)}><Icon name="start" /></button>
-                <button className="icon-button" aria-label="Previous move" title="Previous move" disabled={ply === 0} onClick={() => navigate(ply - 1)}><Icon name="chevronLeft" /></button>
-                <span className="move-count" aria-live="polite">{ply}<span> / {moves.length}</span></span>
-                <button className="icon-button" aria-label="Next move" title="Next move" disabled={ply === moves.length} onClick={() => navigate(ply + 1)}><Icon name="chevronRight" /></button>
-                <button className="icon-button" aria-label="Last move" title="Last move" disabled={ply === moves.length} onClick={() => navigate(moves.length)}><Icon name="end" /></button>
+            </div>
+            <div className="player-row bottom-player">
+              <span
+                className={`player-avatar ${orientation === "white" ? "player-white" : "player-black"}`}
+              >
+                <Icon name="user" />
+              </span>
+              <div>
+                <strong>
+                  {player(orientation === "white" ? "white" : "black")}
+                </strong>
               </div>
-              <button className="icon-button" aria-label="Reset board" title="Reset board" disabled={moves.length === 0} onClick={() => { setMoves([]); navigate(0); }}><Icon name="reset" /></button>
+              <span className="turn-indicator" role="status">
+                <span className="status-dot" />
+                {status}
+              </span>
             </div>
-            <p className="board-help">Click a piece to see legal moves. Right-click and drag to draw arrows.</p>
-            <details className="board-options"><summary>Board options</summary><div className="board-options-inner"><label htmlFor="promotion">Promote pawns to</label><select id="promotion" value={promotion} onChange={(event) => setPromotion(event.target.value as Promotion)}><option value="q">Queen</option><option value="r">Rook</option><option value="b">Bishop</option><option value="n">Knight</option></select><button className="text-button" disabled={!moves.length} onClick={() => { setMoves(moves.slice(0, -1)); navigate(Math.min(ply, moves.length - 1)); }}><Icon name="undo" />Undo last move</button></div><p className="piece-credit">Classic pieces by Colin M.L. Burnett, via Lichess. <a href="/pieces/cburnett/ATTRIBUTION.txt" target="_blank" rel="noreferrer">Source &amp; license</a></p></details>
+            <div className="board-toolbar">
+              <button
+                className="icon-button"
+                aria-label="Flip board"
+                title="Flip board"
+                onClick={() =>
+                  setOrientation(orientation === "white" ? "black" : "white")
+                }
+              >
+                <Icon name="flip" />
+              </button>
+              <div className="move-navigation" aria-label="Move navigation">
+                <button
+                  className="icon-button"
+                  aria-label="First move"
+                  title="First move"
+                  disabled={ply === 0}
+                  onClick={() => navigate(0)}
+                >
+                  <Icon name="start" />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label="Previous move"
+                  title="Previous move"
+                  disabled={ply === 0}
+                  onClick={() => navigate(ply - 1)}
+                >
+                  <Icon name="chevronLeft" />
+                </button>
+                <span className="move-count" aria-live="polite">
+                  {ply}
+                  <span> / {moves.length}</span>
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="Next move"
+                  title="Next move"
+                  disabled={ply === moves.length}
+                  onClick={() => navigate(ply + 1)}
+                >
+                  <Icon name="chevronRight" />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label="Last move"
+                  title="Last move"
+                  disabled={ply === moves.length}
+                  onClick={() => navigate(moves.length)}
+                >
+                  <Icon name="end" />
+                </button>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Reset board"
+                title="Reset board"
+                disabled={moves.length === 0}
+                onClick={() => {
+                  setImported(null);
+                  setInitialFen(DEFAULT_POSITION);
+                  setMoves([]);
+                  navigate(0);
+                }}
+              >
+                <Icon name="reset" />
+              </button>
+            </div>
           </section>
 
           <aside className="context-card" aria-label="Game workspace">
+            <EngineControls engine={engine} />
+            {imported && <p className="imported-game-summary">{[imported.event, imported.date, imported.timeControl, imported.result !== "*" ? `Result ${imported.result}` : ""].filter(Boolean).join(" · ")}</p>}
             {mode === "home" ? (
               <div className="home-panel">
-                <div className="panel-symbol"><Icon name="chart" /></div>
-                <p className="eyebrow">A FRESH PERSPECTIVE</p>
-                <h2>Your game.<br />Your next breakthrough.</h2>
-                <p className="panel-description">Look back at a game, find the moments that mattered, and discover a better next move.</p>
                 <div className="home-actions">
-                  <button className="action-card action-primary" onClick={() => setMode("import")}><span className="action-icon"><Icon name="chart" /></span><span><strong>Analyze a Game</strong><small>Bring a game. Find the lessons.</small></span><Icon name="arrow" /></button>
-                  <button className="action-card action-secondary" onClick={() => setMode("puzzle")}><span className="action-icon"><Icon name="puzzle" /></span><span><strong>Solve a Puzzle</strong><small>A new perspective on a position.</small></span><Icon name="arrow" /></button>
+                  <button
+                    className="action-card action-primary"
+                    onClick={() => setMode("import")}
+                  >
+                    <span className="action-icon">
+                      <Icon name="chart" />
+                    </span>
+                    <span>
+                      <strong>Analyze a Game</strong>
+                    </span>
+                    <Icon name="arrow" />
+                  </button>
+                  <button
+                    className="action-card action-secondary"
+                    onClick={() => setMode("puzzle")}
+                  >
+                    <span className="action-icon">
+                      <Icon name="puzzle" />
+                    </span>
+                    <span>
+                      <strong>Solve a Puzzle</strong>
+                    </span>
+                    <Icon name="arrow" />
+                  </button>
                 </div>
-                <p className="home-board-tip"><Icon name="spark" />Just exploring? The board is yours to try.</p>
               </div>
             ) : (
               <>
-                <button className="text-button back-button" onClick={() => setMode("home")}><Icon name="back" />Back to workspace</button>
-                <div className="mode-switch" aria-label="Workspace mode"><button aria-pressed={mode === "import"} onClick={() => setMode("import")}><Icon name="chart" />Analyze a Game</button><button aria-pressed={mode === "puzzle"} onClick={() => setMode("puzzle")}><Icon name="puzzle" />Solve a Puzzle</button></div>
-                <div hidden={mode !== "import"}><ImportPanel /></div>
-                {mode === "puzzle" && <section className="puzzle-panel"><div className="panel-symbol"><Icon name="puzzle" /></div><p className="eyebrow">ONE POSITION. NEW POSSIBILITIES.</p><h2>A place to sharpen<br />your instincts.</h2><p className="panel-description">Tactical challenges will live here. Puzzle selection and solution checking are coming in a later step.</p><div className="notice"><Icon name="target" /><div><strong>For now, explore the board</strong><p>Try legal moves, flip the board, and step through your line. Engine replies and puzzle scoring aren’t connected yet.</p></div></div><button className="primary-button" onClick={() => setMode("home")}>Return to workspace<Icon name="arrow" /></button></section>}
+                <button
+                  className="text-button back-button"
+                  onClick={() => setMode("home")}
+                >
+                  <Icon name="back" />
+                  Back to workspace
+                </button>
+                <div className="mode-switch" aria-label="Workspace mode">
+                  <button
+                    aria-pressed={mode === "import"}
+                    onClick={() => setMode("import")}
+                  >
+                    <Icon name="chart" />
+                    Analyze a Game
+                  </button>
+                  <button
+                    aria-pressed={mode === "puzzle"}
+                    onClick={() => setMode("puzzle")}
+                  >
+                    <Icon name="puzzle" />
+                    Solve a Puzzle
+                  </button>
+                </div>
+                <div hidden={mode !== "import"}>
+                  <ImportPanel onImport={importGame} />
+                </div>
+                {mode === "puzzle" && (
+                  <section className="puzzle-panel">
+                    <h2>Puzzles</h2>
+                    <p className="panel-description">
+                      Puzzles are not available yet.
+                    </p>
+                  </section>
+                )}
               </>
             )}
-            {moves.length > 0 && <section className="move-history" aria-label="Move history"><div className="section-heading"><h3>Your line</h3><span>{moves.length} half-moves</span></div><p className="line-hint">Select a move to revisit the position.</p><ol>{Array.from({ length: Math.ceil(moves.length / 2) }, (_, index) => <li key={index}><span className="move-number">{index + 1}.</span>{moves.slice(index * 2, index * 2 + 2).map((move, offset) => { const movePly = index * 2 + offset + 1; return <button key={movePly} aria-current={ply === movePly ? "step" : undefined} onClick={() => navigate(movePly)}>{move}</button>; })}</li>)}</ol></section>}
-            <div className="workspace-features"><div><Icon name="chart" /><strong>Review</strong><span>Understand your moves</span></div><div><Icon name="branch" /><strong>Explore</strong><span>See other possibilities</span></div><div><Icon name="target" /><strong>Improve</strong><span>Learn from each game</span></div></div>
-            <p className="panel-footnote"><Icon name="shield" />A focused space for your chess.</p>
+            {moves.length > 0 && (
+              <section className="move-history" aria-label="Move history">
+                <div className="section-heading">
+                  <h3>Moves</h3>
+                  <span>{moves.length} half-moves</span>
+                </div>
+                <p className="line-hint">
+                  Select a move to revisit the position.
+                </p>
+                <ol>
+                  {moveRows.map((row) => <li key={row.number}>
+                    <span className="move-number">{row.number}.</span>
+                    {row.entries.map((move) => <button key={move.ply} style={{ gridColumn: move.black ? 3 : 2 }} aria-current={ply === move.ply ? "step" : undefined} onClick={() => navigate(move.ply)}>{move.san}</button>)}
+                  </li>)}
+                </ol>
+              </section>
+            )}
           </aside>
         </div>
-        <footer className="workspace-footer"><span>Made for the love of the game.</span><span>Study a little. See more.</span></footer>
       </main>
     </>
   );

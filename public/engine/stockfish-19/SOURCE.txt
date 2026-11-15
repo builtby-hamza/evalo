@@ -1,0 +1,14 @@
+Stockfish 19 / Stockfish.js 19.0.1
+Copyright the Stockfish developers and Stockfish.js contributors.
+Distributed unmodified under GNU GPL v3. See COPYING.txt in this directory.
+
+Exact corresponding source and build instructions:
+https://github.com/nmrugg/stockfish.js/tree/v19.0.1
+Source archive:
+https://github.com/nmrugg/stockfish.js/archive/refs/tags/v19.0.1.tar.gz
+Original release assets:
+https://github.com/nmrugg/stockfish.js/releases/tag/v19.0.1
+
+Included builds: stockfish-19-lite-single and stockfish-19-single.
+The Lite build is loaded by default. The full build is downloaded by the
+browser only after the user chooses it. All analysis runs on the device.

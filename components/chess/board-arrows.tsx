@@ -2,7 +2,9 @@ import { useId } from "react";
 
 export type BoardArrow = { startSquare: string; endSquare: string };
 
-export function BoardArrows({ arrows, preview, orientation }: {
+export function BoardArrows({ arrows, preview, orientation, color = "#378331", engine = false }: {
+  color?: string;
+  engine?: boolean;
   arrows: BoardArrow[];
   preview: BoardArrow | null;
   orientation: "white" | "black";
@@ -20,8 +22,8 @@ export function BoardArrows({ arrows, preview, orientation }: {
     : arrows;
 
   return (
-    <svg className="board-arrows" viewBox="0 0 800 800" aria-hidden="true">
-      <defs><marker id={markerId} markerUnits="userSpaceOnUse" markerWidth="34" markerHeight="42" refX="0" refY="21" orient="auto" overflow="visible"><path d="M0 0 34 21 0 42Z" fill="#378331" /></marker></defs>
+    <svg data-engine-arrow={engine || undefined} className="board-arrows" viewBox="0 0 800 800" aria-hidden="true">
+      <defs><marker id={markerId} markerUnits="userSpaceOnUse" markerWidth="34" markerHeight="42" refX="0" refY="21" orient="auto" overflow="visible"><path d="M0 0 34 21 0 42Z" fill={color} /></marker></defs>
       {visibleArrows.map((arrow, index) => {
         const start = center(arrow.startSquare);
         const end = center(arrow.endSquare);
@@ -33,7 +35,7 @@ export function BoardArrows({ arrows, preview, orientation }: {
           x: end.x - (end.x - start.x) / distance * 34,
           y: end.y - (end.y - start.y) / distance * 34,
         };
-        return <path key={`${arrow.startSquare}-${arrow.endSquare}-${index}`} data-arrow={`${arrow.startSquare}-${arrow.endSquare}`} d={`M${start.x} ${start.y} L${shaftEnd.x} ${shaftEnd.y}`} fill="none" stroke="#378331" strokeWidth="16" strokeLinecap="round" opacity={arrow === preview ? 0.5 : 0.7} markerEnd={`url(#${markerId})`} />;
+        return <path key={`${arrow.startSquare}-${arrow.endSquare}-${index}`} data-arrow={`${arrow.startSquare}-${arrow.endSquare}`} d={`M${start.x} ${start.y} L${shaftEnd.x} ${shaftEnd.y}`} fill="none" stroke={color} strokeWidth="16" strokeLinecap="round" opacity={arrow === preview ? 0.5 : 0.7} markerEnd={`url(#${markerId})`} />;
       })}
     </svg>
   );

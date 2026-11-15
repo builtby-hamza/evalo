@@ -19,13 +19,13 @@ test("light theme, visible board, responsive layout, and panel switching", async
   await page.getByRole("button", { name: "Paste PGN", exact: true }).click();
   await expect(page.getByLabel("Game notation")).toHaveValue("1. e4 e5 2. Nf3 Nc6");
   await page.getByRole("button", { name: "Solve a Puzzle", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "A place to sharpen your instincts." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Puzzles" })).toBeVisible();
   await page.getByRole("button", { name: "Analyze a Game", exact: true }).click();
   await expect(page.getByLabel("Game notation")).toHaveValue("1. e4 e5 2. Nf3 Nc6");
-  await expect(page.getByRole("button", { name: "Review game" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Analyze game", exact: true })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("import.png"), fullPage: true });
   await page.getByRole("button", { name: "Back to workspace" }).click();
-  await expect(page.getByRole("button", { name: /Bring a game/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Analyze a Game", exact: true })).toBeVisible();
 });
 
 test("legal moves, invalid moves, history navigation, flip, and reset", async ({ page }) => {
@@ -70,8 +70,8 @@ test("file selection displays notation and handles invalid or empty files", asyn
 test("pieces can be moved with the keyboard", async ({ page }) => {
   await page.getByRole("button", { name: "e2, white pawn", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await page.keyboard.press("ArrowUp");
-  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Shift+ArrowUp");
+  await page.keyboard.press("Shift+ArrowUp");
   await page.keyboard.press("Enter");
   await expect(page.locator('[data-square="e4"] [data-piece="wP"]')).toBeVisible();
 });
@@ -126,7 +126,7 @@ test("a legal capture is highlighted and remains playable", async ({ page }) => 
 });
 
 test("right-drag draws green arrows, toggles them, and left-click clears them", async ({ page }, testInfo) => {
-  const arrows = page.locator('.board-frame path[marker-end]');
+  const arrows = page.locator('.board-arrows:not([data-engine-arrow]) path[marker-end]');
   async function drawArrow(from: string, to: string) {
     const start = await page.locator(`[data-square="${from}"]`).boundingBox();
     const end = await page.locator(`[data-square="${to}"]`).boundingBox();
@@ -158,7 +158,7 @@ test("right-drag draws green arrows, toggles them, and left-click clears them", 
   await page.locator(".board-frame").screenshot({ path: testInfo.outputPath("arrowhead.png") });
 });
 
-test("classic assets load and the desktop board gets most of the workspace width", async ({ page }, testInfo) => {
+test("classic assets load and the desktop board fits the viewport", async ({ page }, testInfo) => {
   const images = page.locator(".board-frame img.chess-piece");
   await expect(images).toHaveCount(32);
   await expect.poll(() => images.evaluateAll((elements) => elements.every((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0))).toBe(true);
@@ -166,8 +166,9 @@ test("classic assets load and the desktop board gets most of the workspace width
   if (testInfo.project.name === "desktop") {
     const board = await page.locator(".board-frame").boundingBox();
     const panel = await page.locator(".context-card").boundingBox();
-    expect(board!.width).toBeGreaterThan(760);
-    expect(board!.width).toBeGreaterThan(panel!.width * 1.4);
+    expect(board!.width).toBeGreaterThan(panel!.width);
+    const card = await page.locator(".board-card").boundingBox();
+    expect(card!.y + card!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   }
 });
 
@@ -258,4 +259,58 @@ test("dark mode themes the workspace, preserves the active position, and survive
   await expect(toggle).not.toBeChecked();
   await expect(page.locator("body")).toHaveCSS("background-color", "rgb(230, 227, 217)");
   expect(errors).toEqual([]);
+});
+
+
+test("arrow keys navigate history without changing text input, and right-click toggles red marks", async ({ page }) => {
+  const square = (name: string) => page.locator(`[data-square="${name}"]`);
+  const tile = page.locator('[data-board-square="e4"]');
+  await square("e2").click();
+  await square("e4").click();
+  await square("e4").click({ button: "right" });
+  await expect(tile).toHaveCSS("background-color", "rgb(230, 107, 100)");
+  await square("e4").click({ button: "right" });
+  await expect(tile).not.toHaveCSS("background-color", "rgb(230, 107, 100)");
+  await square("e4").click({ button: "right" });
+  await page.keyboard.press("ArrowLeft");
+  await expect(square("e2").locator('[data-piece="wP"]')).toBeVisible();
+  await expect(tile).not.toHaveCSS("background-color", "rgb(230, 107, 100)");
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.locator(".move-count")).toHaveText("0 / 1");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(square("e4").locator('[data-piece="wP"]')).toBeVisible();
+  await expect(page.locator(".move-count")).toHaveText("1 / 1");
+  await page.getByRole("button", { name: "Analyze a Game", exact: true }).click();
+  await page.getByLabel("Game notation").fill("1. e4");
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.locator(".move-count")).toHaveText("1 / 1");
+});
+
+
+test("vertical arrow keys do not scroll the page", async ({ page }) => {
+  await page.locator(".brand").click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.locator(".board-options")).toHaveCount(0);
+});
+
+test("workspace fits laptop, monitor, and wide desktop viewports", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop");
+  for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }, { width: 1920, height: 720 }]) {
+    await page.setViewportSize(viewport);
+    const card = page.locator(".board-card");
+    await expect.poll(async () => {
+      const bounds = await card.boundingBox();
+      return bounds ? bounds.y + bounds.height : Infinity;
+    }).toBeLessThanOrEqual(viewport.height);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+    await page.getByRole("button", { name: "Analyze a Game", exact: true }).click();
+    const panel = await page.locator(".context-card").boundingBox();
+    expect(panel!.y + panel!.height).toBeLessThanOrEqual(viewport.height);
+    await page.getByRole("button", { name: "Back to workspace" }).click();
+  }
+  await page.screenshot({ path: testInfo.outputPath("viewport-fit.png"), fullPage: true });
 });

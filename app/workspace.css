@@ -1,0 +1,37 @@
+.move-history { margin-bottom: 0; }
+.move-history ol { max-height: clamp(260px, 50dvh, 720px); }
+.move-history li { font-size: 14px; }
+.move-history button { padding-block: 8px; }
+
+/* Fit the board to both viewport dimensions; keep controls at readable sizes. */
+@media (min-width: 761px) and (min-height: 500px) {
+  :root {
+    --workspace-gap: clamp(12px, 2vmin, 28px);
+    --header-height: clamp(56px, 7dvh, 80px);
+    --panel-width: clamp(300px, 30vw, 480px);
+    --board-size: min(
+      calc(100dvh - var(--header-height) - 2 * var(--workspace-gap) - 194px),
+      calc(100vw - 3 * var(--workspace-gap) - var(--panel-width) - 26px)
+    );
+  }
+  .site-header { height: var(--header-height); flex-shrink: 0; }
+  .header-inner { max-width: none; padding-inline: var(--workspace-gap); }
+  .workspace { max-width: none; padding: var(--workspace-gap); }
+  .workspace-grid {
+    grid-template-columns: calc(var(--board-size) + 26px) var(--panel-width);
+    justify-content: center;
+    gap: var(--workspace-gap);
+  }
+  .board-card { padding-inline: 12px; }
+  .player-row, .bottom-player { min-height: 48px; height: 48px; padding-block: 6px; }
+  .player-avatar { width: 32px; height: 32px; }
+  .board-toolbar { padding-block: 8px; }
+  .board-help { padding-block: 8px; font-size: 10px; }
+  .context-card {
+    padding: clamp(16px, 2vmin, 28px);
+    max-height: calc(100dvh - var(--header-height) - 2 * var(--workspace-gap));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .move-history ol { max-height: clamp(220px, calc(100dvh - 420px), 900px); }
+}
